@@ -57,6 +57,14 @@
             <span class="brand-badge"><span class="badge-dot" aria-hidden="true"></span>P2P FAST</span>
         </div>
     </div>
+    <!-- Offline Status Banner -->
+    <aside id="offline-banner" class="offline-banner" hidden role="status" aria-live="polite">
+        <div class="offline-banner-content">
+            <span class="offline-pulse-dot" aria-hidden="true"></span>
+            <span class="offline-text">Offline Mode: Connect on local hotspot via QR</span>
+            <button id="open-offline-modal-btn" class="offline-btn" type="button">Direct Connect</button>
+        </div>
+    </aside>
     <header class="row-reverse wrap opacity-0">
         <a href="#about" class="icon-button" data-i18n-key="header.about" data-i18n-attrs="title aria-label">
             <svg class="icon">
@@ -95,6 +103,11 @@
         <div id="install" class="icon-button" data-i18n-key="header.install" data-i18n-attrs="title" hidden>
             <svg class="icon">
                 <use xlink:href="#homescreen"></use>
+            </svg>
+        </div>
+        <div id="offline-direct-header-btn" class="icon-button" title="Offline Direct Connect" aria-label="Offline Direct Connect">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 2L3 14h8l-2 8 11-12h-8l2-8z" />
             </svg>
         </div>
         <div id="pair-device" class="icon-button" data-i18n-key="header.pair-device" data-i18n-attrs="title">
@@ -374,6 +387,94 @@
                 </div>
                 <div class="center row-reverse btn-row wrap">
                     <button class="btn btn-rounded btn-grey" type="button" data-i18n-key="dialogs.close" data-i18n-attrs="text" close></button>
+                </div>
+            </x-paper>
+        </x-background>
+    </x-dialog>
+    <!-- Offline Direct Connect Dialog -->
+    <x-dialog id="offline-direct-dialog">
+        <x-background class="full center text-center">
+            <x-paper shadow="2" class="offline-direct-paper">
+                <div class="row space-between center p-2 offline-modal-header">
+                    <div class="row center gap-2">
+                        <div class="offline-icon-circle">
+                            <svg viewBox="0 0 24 24" class="icon-bolt" width="18" height="18" fill="currentColor">
+                                <path d="M13 2L3 14h8l-2 8 11-12h-8l2-8z"/>
+                            </svg>
+                        </div>
+                        <h2 class="dialog-title text-left">Offline Direct Connect</h2>
+                    </div>
+                    <button class="icon-button modal-close-btn" type="button" close aria-label="Close dialog">
+                        <svg class="icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 6L6 18M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <p class="offline-modal-subtitle">Connect and transfer files directly over local hotspot without internet or signaling server.</p>
+
+                <!-- Mode Switcher Tabs -->
+                <div class="offline-tabs row center">
+                    <button id="offline-tab-send" class="offline-tab active" type="button">1. Create Link (Sender)</button>
+                    <button id="offline-tab-receive" class="offline-tab" type="button">2. Join Link (Receiver)</button>
+                </div>
+
+                <!-- Tab 1: Sender Panel -->
+                <div id="offline-panel-send" class="offline-panel">
+                    <div class="offline-step-card">
+                        <div class="step-badge">Step 1</div>
+                        <h3 class="step-title">Scan Offer on Receiver</h3>
+                        <p class="step-desc">Scan this QR code with the receiver device or copy the offer code.</p>
+                        <div class="offline-qr-wrapper center">
+                            <div id="offline-send-qr" class="offline-qr-box center">
+                                <div class="qr-placeholder-spinner">Generating link...</div>
+                            </div>
+                        </div>
+                        <div class="row center gap-2 mt-2">
+                            <button id="offline-copy-offer-btn" class="btn btn-rounded btn-blue" type="button">Copy Offer Code</button>
+                            <button id="offline-regen-offer-btn" class="btn btn-rounded btn-grey" type="button">Regenerate</button>
+                        </div>
+                    </div>
+
+                    <div class="offline-step-card mt-3">
+                        <div class="step-badge">Step 2</div>
+                        <h3 class="step-title">Paste Receiver's Reply</h3>
+                        <p class="step-desc">Paste the reply code generated on the receiver to finalize the channel.</p>
+                        <textarea id="offline-sender-reply-input" class="textarea offline-code-textarea" rows="2" placeholder="Paste receiver's reply code here..."></textarea>
+                        <div class="row center mt-2">
+                            <button id="offline-sender-connect-btn" class="btn btn-rounded btn-primary-glow" type="button">Connect Hotspot Channel</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Receiver Panel -->
+                <div id="offline-panel-receive" class="offline-panel" hidden>
+                    <div class="offline-step-card">
+                        <div class="step-badge">Step 1</div>
+                        <h3 class="step-title">Paste Sender's Offer</h3>
+                        <p class="step-desc">Paste the offer code from the sender device below.</p>
+                        <textarea id="offline-receiver-offer-input" class="textarea offline-code-textarea" rows="2" placeholder="Paste sender's offer code here..."></textarea>
+                        <div class="row center mt-2">
+                            <button id="offline-receiver-answer-btn" class="btn btn-rounded btn-primary-glow" type="button">Generate Reply</button>
+                        </div>
+                    </div>
+
+                    <div id="offline-receiver-reply-card" class="offline-step-card mt-3" hidden>
+                        <div class="step-badge">Step 2</div>
+                        <h3 class="step-title">Show Reply to Sender</h3>
+                        <p class="step-desc">Sender scans this QR code or pastes the reply code.</p>
+                        <div class="offline-qr-wrapper center">
+                            <div id="offline-receive-qr" class="offline-qr-box center"></div>
+                        </div>
+                        <div class="row center gap-2 mt-2">
+                            <button id="offline-copy-reply-btn" class="btn btn-rounded btn-blue" type="button">Copy Reply Code</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="offline-status-msg" class="offline-status-msg" hidden></div>
+
+                <div class="btn-row row-reverse wrap mt-3">
+                    <button class="btn btn-rounded btn-grey" type="button" close>Close</button>
                 </div>
             </x-paper>
         </x-background>

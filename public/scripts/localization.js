@@ -103,15 +103,20 @@ class Localization {
     }
 
     static async fetchTranslationsFor(newLocale) {
-        const response = await fetch(`lang/${newLocale}.json`, {
-            method: 'GET',
-            credentials: 'include',
-            mode: 'no-cors',
-        });
+        try {
+            const response = await fetch(`lang/${newLocale}.json`, {
+                method: 'GET',
+                credentials: 'include',
+                mode: 'no-cors',
+            });
 
-        if (response.redirected === true || response.status !== 200) return false;
+            if (response.redirected === true || response.status !== 200) return false;
 
-        return await response.json();
+            return await response.json();
+        } catch (e) {
+            console.warn("Could not fetch translation file for:", newLocale, e);
+            return false;
+        }
     }
 
     static async translatePage() {

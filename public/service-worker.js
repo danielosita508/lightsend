@@ -1,5 +1,5 @@
-const cacheVersion = 'v1.11.2';
-const cacheTitle = `pairdrop-cache-${cacheVersion}`;
+const cacheVersion = 'v2.0.0-lightsend-offline';
+const cacheTitle = `lightsend-cache-${cacheVersion}`;
 const relativePathsToCache = [
     './',
     'index.html',
@@ -65,148 +65,134 @@ const relativePathsToCache = [
     'lang/zh-TW.json'
 ];
 const relativePathsNotToCache = [
-    'config'
-]
+    'config',
+    'rtc-config'
+];
 
 self.addEventListener('install', function(event) {
-    // Perform install steps
-    console.log("Cache files for sw:", cacheVersion);
+    console.log("Pre-caching LightSend app shell for sw:", cacheVersion);
     event.waitUntil(
         caches.open(cacheTitle)
-            .then(function(cache) {
-                return cache
-                    .addAll(relativePathsToCache)
-                    .then(_ => {
-                        console.log('All files cached for sw:', cacheVersion);
-                        self.skipWaiting();
-                    });
+            .then(async function(cache) {
+                await Promise.all(
+                    relativePathsToCache.map(async path => {
+                        try {
+                            await cache.add(path);
+                        } catch (err) {
+                            console.warn("Could not precache file:", path, err);
+                        }
+                    })
+                );
+                console.log('App shell cached successfully for sw:', cacheVersion);
+                return self.skipWaiting();
             })
     );
 });
-
-// fetch the resource from the network
-const fromNetwork = (request, timeout) =>
-    new Promise((resolve, reject) => {
-        const timeoutId = setTimeout(reject, timeout);
-        fetch(request, {cache: "no-store"})
-            .then(response => {
-                if (response.redirected) {
-                    throw new Error("Fetch is redirect. Abort usage and cache!");
-                }
-
-                clearTimeout(timeoutId);
-                resolve(response);
-
-                // Prevent requests that are in relativePathsNotToCache from being cached
-                if (doNotCacheRequest(request)) return;
-
-                updateCache(request)
-                    .then(() => console.log("Cache successfully updated for", request.url))
-                    .catch(err => console.log("Cache could not be updated for", request.url, err));
-            })
-            .catch(error => {
-                // Handle any errors that occurred during the fetch
-                console.error(`Could not fetch ${request.url}.`);
-                reject(error);
-            });
-    });
-
-// fetch the resource from the browser cache
-const fromCache = request =>
-    caches
-        .open(cacheTitle)
-        .then(cache =>
-            cache.match(request)
-        );
 
 const rootUrl = location.href.substring(0, location.href.length - "service-worker.js".length);
 const rootUrlLength = rootUrl.length;
 
 const doNotCacheRequest = request => {
+    const url = new URL(request.url);
+    if (url.protocol === 'ws:' || url.protocol === 'wss:') return true;
+    if (url.pathname.includes('/server') || url.pathname.includes('/rtc-config') || url.pathname.includes('/config')) return true;
+    if (request.method !== 'GET') return true;
     const requestRelativePath = request.url.substring(rootUrlLength);
-    return relativePathsNotToCache.indexOf(requestRelativePath) !== -1
+    return relativePathsNotToCache.indexOf(requestRelativePath) !== -1;
 };
 
-// cache the current page to make it available for offline
-const updateCache = request => new Promise((resolve, reject) => {
-    caches
-        .open(cacheTitle)
-        .then(cache =>
-            fetch(request, {cache: "no-store"})
-                .then(response => {
-                    if (response.redirected) {
-                        throw new Error("Fetch is redirect. Abort usage and cache!");
-                    }
-
-                    cache
-                        .put(request, response)
-                        .then(() => resolve());
-                })
-                .catch(reason => reject(reason))
-        );
-});
-
-// general strategy when making a request:
-// 1. Try to retrieve file from cache
-// 2. If cache is not available: Fetch from network and update cache.
-// This way, cached files are only updated if the cacheVersion is changed
+// General fetch strategy:
+// 1. Navigation requests: Network-first with instant fallback to cached index.html when offline
+// 2. Static assets: Cache-first strategy, falling back to network and caching
+// 3. WebRTC / WebSocket / API endpoints: Never cached
 self.addEventListener('fetch', function(event) {
     const swOrigin = new URL(self.location.href).origin;
     const requestOrigin = new URL(event.request.url).origin;
 
+    // Do not intercept cross-origin requests (e.g. fonts.googleapis.com)
     if (swOrigin !== requestOrigin) {
-        // Do not handle requests from other origin
-        event.respondWith(fetch(event.request));
+        event.respondWith(fetch(event.request).catch(() => new Response('', { status: 408, statusText: 'Offline' })));
+        return;
     }
-    else if (event.request.method === "POST") {
-        // Requests related to Web Share Target.
+
+    // Web Share Target POST request
+    if (event.request.method === "POST") {
         event.respondWith((async () => {
             const share_url = await evaluateRequestData(event.request);
             return Response.redirect(encodeURI(share_url), 302);
         })());
+        return;
     }
-    else {
-        // Regular requests not related to Web Share Target:
-        // If request is excluded from cache -> respondWith fromNetwork
-        // else -> try fromCache first
+
+    // Do not cache WebSocket or API calls
+    if (doNotCacheRequest(event.request)) {
+        event.respondWith(fetch(event.request));
+        return;
+    }
+
+    // Navigation requests (HTML document loads)
+    if (event.request.mode === 'navigate') {
         event.respondWith(
-            doNotCacheRequest(event.request)
-                ? fromNetwork(event.request, 10000)
-                : fromCache(event.request)
-                    .then(rsp => {
-                        // if fromCache resolves to undefined fetch from network instead
-                        if (!rsp) {
-                            throw new Error("No match found.");
-                        }
-                        return rsp;
-                    })
-                    .catch(error => {
-                        console.error("Could not retrieve request from cache:", event.request.url, error);
-                        return fromNetwork(event.request, 10000);
-                    })
+            fetch(event.request)
+                .then(response => {
+                    if (response && response.status === 200 && !response.redirected) {
+                        const responseToCache = response.clone();
+                        caches.open(cacheTitle).then(cache => cache.put(event.request, responseToCache));
+                    }
+                    return response;
+                })
+                .catch(async () => {
+                    console.log("LightSend offline: serving cached index.html for navigation");
+                    const cachedNav = await caches.match(event.request);
+                    if (cachedNav) return cachedNav;
+                    const cachedIndex = await caches.match('index.html');
+                    if (cachedIndex) return cachedIndex;
+                    return await caches.match('./');
+                })
         );
+        return;
     }
+
+    // Cache-first strategy for static assets
+    event.respondWith(
+        caches.match(event.request).then(cachedResponse => {
+            if (cachedResponse) {
+                return cachedResponse;
+            }
+            return fetch(event.request).then(networkResponse => {
+                if (networkResponse && networkResponse.status === 200 && !networkResponse.redirected) {
+                    const responseToCache = networkResponse.clone();
+                    caches.open(cacheTitle).then(cache => cache.put(event.request, responseToCache));
+                }
+                return networkResponse;
+            });
+        }).catch(async error => {
+            console.warn("Could not retrieve static asset:", event.request.url, error);
+            if (event.request.headers.get('accept') && event.request.headers.get('accept').includes('text/html')) {
+                const cachedIndex = await caches.match('index.html');
+                if (cachedIndex) return cachedIndex;
+            }
+            return new Response('Offline resource unavailable', { status: 503, statusText: 'Offline' });
+        })
+    );
 });
 
-
-// on activation, we clean up the previously registered service workers
+// Activation: delete older version caches
 self.addEventListener('activate', evt => {
     console.log("Activate sw:", cacheVersion);
     evt.waitUntil(clients.claim());
     return evt.waitUntil(
-        caches
-            .keys()
-            .then(cacheNames => {
-                return Promise.all(
-                    cacheNames.map(cacheName => {
-                        if (cacheName !== cacheTitle) {
-                            console.log("Delete cache:", cacheName);
-                            return caches.delete(cacheName);
-                        }
-                    })
-                );
-            })
-    )
+        caches.keys().then(cacheNames => {
+            return Promise.all(
+                cacheNames.map(cacheName => {
+                    if (cacheName !== cacheTitle) {
+                        console.log("Delete older cache:", cacheName);
+                        return caches.delete(cacheName);
+                    }
+                })
+            );
+        })
+    );
 });
 
 const evaluateRequestData = function (request) {
@@ -221,7 +207,7 @@ const evaluateRequestData = function (request) {
 
         if (files && files.length > 0) {
             let fileObjects = [];
-            for (let i=0; i<files.length; i++) {
+            for (let i = 0; i < files.length; i++) {
                 fileObjects.push({
                     name: files[i].name,
                     buffer: await files[i].arrayBuffer()
@@ -255,4 +241,4 @@ const evaluateRequestData = function (request) {
             resolve(pairDropUrl + urlArgument);
         }
     });
-}
+};

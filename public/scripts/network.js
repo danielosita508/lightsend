@@ -28,38 +28,74 @@ class ServerConnection {
 
     _getConfig() {
         console.log("Loading config...")
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
+            let attempts = 0;
+            const fallbackConfig = () => {
+                const defaultConfig = {
+                    signalingServer: null,
+                    buttons: null
+                };
+                this._config = defaultConfig;
+                Events.fire('config', defaultConfig);
+                const defaultWsConfig = {
+                    rtcConfig: {
+                        sdpSemantics: "unified-plan",
+                        iceServers: []
+                    },
+                    wsFallback: false
+                };
+                this._setWsConfig(defaultWsConfig);
+                Events.fire('ws-disconnected');
+                resolve();
+            };
+
+            if (!navigator.onLine) {
+                console.log("Device offline: applying offline config defaults");
+                fallbackConfig();
+                return;
+            }
+
             let xhr = new XMLHttpRequest();
+            xhr.timeout = 2000;
             xhr.addEventListener("load", () => {
                 if (xhr.status === 200) {
-                    // Config received
-                    let config = JSON.parse(xhr.responseText);
-                    console.log("Config loaded:", config)
-                    this._config = config;
-                    Events.fire('config', config);
-                    resolve()
-                } else if (xhr.status < 200 || xhr.status >= 300) {
-                    retry(xhr);
+                    try {
+                        let config = JSON.parse(xhr.responseText);
+                        console.log("Config loaded:", config);
+                        this._config = config;
+                        Events.fire('config', config);
+                        resolve();
+                        return;
+                    } catch (e) {}
                 }
-            })
+                retry(xhr);
+            });
 
             xhr.addEventListener("error", _ => {
                 retry(xhr);
             });
 
+            xhr.addEventListener("timeout", _ => {
+                retry(xhr);
+            });
+
             function retry(request) {
-                setTimeout(function () {
-                    openAndSend(request)
-                }, 1000)
+                attempts++;
+                if (attempts >= 2 || !navigator.onLine) {
+                    console.warn("Could not reach config endpoint, falling back to offline defaults.");
+                    fallbackConfig();
+                    return;
+                }
+                setTimeout(() => openAndSend(request), 800);
             }
 
-            function openAndSend() {
-                xhr.open('GET', 'config');
-                xhr.send();
+            function openAndSend(req) {
+                req.open('GET', 'config');
+                req.send();
             }
 
             openAndSend(xhr);
-        })
+        });
     }
 
     _setWsConfig(wsConfig) {
@@ -1311,3 +1347,80 @@ class FileDigester {
         }));
     }
 }
+
+class OfflineRTCPeer extends Peer {
+    constructor(isCaller, peerId, pc, dc) {
+        super(null, isCaller, peerId, 'offline', 'offline-hotspot');
+        this.rtcSupported = true;
+        this._conn = pc;
+        this._channel = dc;
+        this._setupChannel();
+    }
+
+    _setupChannel() {
+        this._channel.binaryType = 'arraybuffer';
+        this._channel.onmessage = e => this._onMessage(e.data);
+        this._channel.onclose = _ => this._onChannelClosed();
+        this._conn.onconnectionstatechange = _ => this._onConnectionStateChange();
+
+        Events.on('beforeunload', e => this._onBeforeUnload(e));
+        Events.on('pagehide', _ => this._onPageHide());
+
+        Events.fire('peer-connected', {
+            peerId: this._peerId,
+            connectionHash: this.getConnectionHash()
+        });
+    }
+
+    _send(message) {
+        if (this._channel && this._channel.readyState === 'open') {
+            this._channel.send(message);
+        }
+    }
+
+    getConnectionHash() {
+        try {
+            if (this._conn && this._conn.localDescription && this._conn.remoteDescription) {
+                const combined = this._conn.localDescription.sdp + this._conn.remoteDescription.sdp;
+                let hash = cyrb53(combined).toString();
+                while (hash.length < 16) hash = "0" + hash;
+                return hash;
+            }
+        } catch (e) {}
+        return "1234567890123456";
+    }
+
+    _onChannelClosed() {
+        console.log('Offline RTC channel closed with', this._peerId);
+        Events.fire('peer-disconnected', this._peerId);
+    }
+
+    _onConnectionStateChange() {
+        if (this._conn && (this._conn.connectionState === 'disconnected' || this._conn.connectionState === 'failed')) {
+            Events.fire('peer-disconnected', this._peerId);
+        }
+    }
+
+    _onBeforeUnload(e) {
+        if (this._busy) {
+            e.preventDefault();
+            return Localization.getTranslation("notifications.unfinished-transfers-warning");
+        }
+    }
+
+    _onPageHide() {
+        this._disconnect();
+    }
+
+    _disconnect() {
+        if (this._channel) {
+            this._channel.onclose = null;
+            this._channel.close();
+        }
+        if (this._conn) {
+            this._conn.close();
+        }
+        Events.fire('peer-disconnected', this._peerId);
+    }
+}
+

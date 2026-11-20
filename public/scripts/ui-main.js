@@ -207,6 +207,16 @@ class FooterUI {
         Events.on('display-name', e => this._onDisplayName(e.detail.displayName));
         Events.on('self-display-name-changed', e => this._insertDisplayName(e.detail));
         Events.on('evaluate-footer-badges', _ => this._evaluateFooterBadges());
+        Events.on('ws-disconnected', _ => this._onWsDisconnected());
+    }
+
+    async _onWsDisconnected() {
+        const saved = await this._getSavedDisplayName();
+        if (saved) {
+            this._insertDisplayName(saved);
+        } else {
+            this.$displayName.setAttribute('placeholder', 'Offline Device');
+        }
     }
 
     async showLoading() {
@@ -562,5 +572,55 @@ class BackgroundCanvas {
         createCanvas();
 
         return {init, startAnimation, switchAnimation, onShareModeChange};
+    }
+}
+
+class OfflineBannerUI {
+    constructor() {
+        this.$banner = $('offline-banner');
+        this.$openModalBtn = $('open-offline-modal-btn');
+        this.$headerBtn = $('offline-direct-header-btn');
+
+        if (this.$openModalBtn) {
+            this.$openModalBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                Events.fire('open-offline-direct-dialog');
+            });
+        }
+        if (this.$banner) {
+            this.$banner.addEventListener('click', () => {
+                Events.fire('open-offline-direct-dialog');
+            });
+        }
+        if (this.$headerBtn) {
+            this.$headerBtn.addEventListener('click', () => {
+                Events.fire('open-offline-direct-dialog');
+            });
+        }
+
+        Events.on('ws-disconnected', () => this.show());
+        Events.on('offline', () => this.show());
+        Events.on('ws-connected', () => this.hide());
+        Events.on('online', () => {
+            if (window.pairDrop && window.pairDrop.server && window.pairDrop.server._isConnected()) {
+                this.hide();
+            }
+        });
+
+        if (!navigator.onLine) {
+            this.show();
+        }
+    }
+
+    show() {
+        if (this.$banner) {
+            this.$banner.removeAttribute('hidden');
+        }
+    }
+
+    hide() {
+        if (this.$banner) {
+            this.$banner.setAttribute('hidden', true);
+        }
     }
 }

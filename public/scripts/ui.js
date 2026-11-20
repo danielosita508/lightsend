@@ -2740,3 +2740,376 @@ class NoSleepUI {
         }
     }
 }
+
+class OfflineDirectConnectDialog extends Dialog {
+    constructor() {
+        super('offline-direct-dialog');
+
+        this.$tabSend = $('offline-tab-send');
+        this.$tabReceive = $('offline-tab-receive');
+        this.$panelSend = $('offline-panel-send');
+        this.$panelReceive = $('offline-panel-receive');
+
+        this.$sendQr = $('offline-send-qr');
+        this.$copyOfferBtn = $('offline-copy-offer-btn');
+        this.$regenOfferBtn = $('offline-regen-offer-btn');
+        this.$senderReplyInput = $('offline-sender-reply-input');
+        this.$senderConnectBtn = $('offline-sender-connect-btn');
+
+        this.$receiverOfferInput = $('offline-receiver-offer-input');
+        this.$receiverAnswerBtn = $('offline-receiver-answer-btn');
+        this.$receiverReplyCard = $('offline-receiver-reply-card');
+        this.$receiveQr = $('offline-receive-qr');
+        this.$copyReplyBtn = $('offline-copy-reply-btn');
+
+        this.$statusMsg = $('offline-status-msg');
+
+        this.senderPc = null;
+        this.senderDc = null;
+        this.receiverPc = null;
+        this.currentOfferCode = '';
+        this.currentReplyCode = '';
+
+        this._bindEvents();
+    }
+
+    _bindEvents() {
+        Events.on('open-offline-direct-dialog', () => this.show());
+
+        if (this.$tabSend && this.$tabReceive) {
+            this.$tabSend.addEventListener('click', () => this._switchTab('send'));
+            this.$tabReceive.addEventListener('click', () => this._switchTab('receive'));
+        }
+
+        if (this.$copyOfferBtn) {
+            this.$copyOfferBtn.addEventListener('click', () => {
+                this._copyText(this.currentOfferCode, 'Offer code');
+            });
+        }
+
+        if (this.$regenOfferBtn) {
+            this.$regenOfferBtn.addEventListener('click', () => {
+                this._createOffer();
+            });
+        }
+
+        if (this.$senderConnectBtn) {
+            this.$senderConnectBtn.addEventListener('click', () => {
+                this._applyReply();
+            });
+        }
+
+        if (this.$receiverAnswerBtn) {
+            this.$receiverAnswerBtn.addEventListener('click', () => {
+                this._createAnswer();
+            });
+        }
+
+        if (this.$copyReplyBtn) {
+            this.$copyReplyBtn.addEventListener('click', () => {
+                this._copyText(this.currentReplyCode, 'Reply code');
+            });
+        }
+    }
+
+    show() {
+        super.show();
+        if (!this.currentOfferCode) {
+            this._createOffer();
+        }
+    }
+
+    _switchTab(tab) {
+        if (tab === 'send') {
+            this.$tabSend.classList.add('active');
+            this.$tabReceive.classList.remove('active');
+            this.$panelSend.removeAttribute('hidden');
+            this.$panelReceive.setAttribute('hidden', true);
+            if (!this.currentOfferCode) this._createOffer();
+        } else {
+            this.$tabReceive.classList.add('active');
+            this.$tabSend.classList.remove('active');
+            this.$panelReceive.removeAttribute('hidden');
+            this.$panelSend.setAttribute('hidden', true);
+        }
+    }
+
+    _setStatus(text, type = 'info') {
+        if (!this.$statusMsg) return;
+        this.$statusMsg.textContent = text;
+        this.$statusMsg.className = `offline-status-msg status-${type}`;
+        this.$statusMsg.removeAttribute('hidden');
+    }
+
+    async _compressSdp(sdpObj) {
+        const jsonStr = JSON.stringify(sdpObj);
+        if ('CompressionStream' in window) {
+            try {
+                const stream = new Blob([jsonStr]).stream();
+                const compressedStream = stream.pipeThrough(new CompressionStream('gzip'));
+                const compressedBuf = await new Response(compressedStream).arrayBuffer();
+                const bytes = new Uint8Array(compressedBuf);
+                let binary = '';
+                for (let i = 0; i < bytes.byteLength; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+                return 'GZ:' + btoa(binary);
+            } catch (e) {
+                console.warn('CompressionStream gzip failed, falling back', e);
+            }
+        }
+        return 'RAW:' + btoa(unescape(encodeURIComponent(jsonStr)));
+    }
+
+    async _decompressSdp(encodedStr) {
+        encodedStr = (encodedStr || '').trim();
+        if (encodedStr.startsWith('GZ:')) {
+            const b64 = encodedStr.substring(3);
+            const binary = atob(b64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            const stream = new Blob([bytes]).stream();
+            const decompressedStream = stream.pipeThrough(new DecompressionStream('gzip'));
+            const text = await new Response(decompressedStream).text();
+            return JSON.parse(text);
+        } else if (encodedStr.startsWith('RAW:')) {
+            const b64 = encodedStr.substring(4);
+            const jsonStr = decodeURIComponent(escape(atob(b64)));
+            return JSON.parse(jsonStr);
+        } else {
+            try {
+                return JSON.parse(encodedStr);
+            } catch (e) {
+                const jsonStr = decodeURIComponent(escape(atob(encodedStr)));
+                return JSON.parse(jsonStr);
+            }
+        }
+    }
+
+    _waitForIceGathering(pc, timeout = 2500) {
+        return new Promise(resolve => {
+            if (pc.iceGatheringState === 'complete') {
+                resolve();
+                return;
+            }
+            let timer = setTimeout(() => {
+                resolve();
+            }, timeout);
+
+            const check = () => {
+                if (pc.iceGatheringState === 'complete') {
+                    clearTimeout(timer);
+                    pc.removeEventListener('icegatheringstatechange', check);
+                    resolve();
+                }
+            };
+            pc.addEventListener('icegatheringstatechange', check);
+            pc.addEventListener('icecandidate', e => {
+                if (!e.candidate) {
+                    clearTimeout(timer);
+                    resolve();
+                }
+            });
+        });
+    }
+
+    async _createOffer() {
+        this._resetSender();
+        this._setStatus("Building local WebRTC offer...", "info");
+        try {
+            this.senderPc = new RTCPeerConnection({ iceServers: [] });
+            this.senderDc = this.senderPc.createDataChannel('data-channel', { ordered: true });
+            this.senderDc.binaryType = 'arraybuffer';
+
+            this.senderDc.onopen = () => {
+                console.log("Sender DataChannel opened directly!");
+                this._onDirectChannelOpened(this.senderPc, this.senderDc, true);
+            };
+
+            const offer = await this.senderPc.createOffer();
+            await this.senderPc.setLocalDescription(offer);
+
+            this._setStatus("Gathering local network addresses...", "info");
+            await this._waitForIceGathering(this.senderPc);
+
+            const localSDP = this.senderPc.localDescription;
+            const compressed = await this._compressSdp(localSDP);
+            this.currentOfferCode = compressed;
+
+            this._renderQr(this.$sendQr, compressed);
+            this._setStatus("Offer ready! Scan QR code or copy code to receiver.", "success");
+        } catch (err) {
+            console.error("Error creating offline offer:", err);
+            this._setStatus("Failed to create offer: " + err.message, "error");
+        }
+    }
+
+    async _createAnswer() {
+        const rawOffer = this.$receiverOfferInput.value.trim();
+        if (!rawOffer) {
+            this._setStatus("Please paste the sender's offer code first.", "error");
+            return;
+        }
+
+        this._setStatus("Decoding offer and generating answer...", "info");
+        try {
+            const offerSDP = await this._decompressSdp(rawOffer);
+            this.receiverPc = new RTCPeerConnection({ iceServers: [] });
+
+            this.receiverPc.ondatachannel = (e) => {
+                console.log("Receiver DataChannel received!");
+                const dc = e.channel;
+                dc.binaryType = 'arraybuffer';
+                dc.onopen = () => {
+                    this._onDirectChannelOpened(this.receiverPc, dc, false);
+                };
+                if (dc.readyState === 'open') {
+                    this._onDirectChannelOpened(this.receiverPc, dc, false);
+                }
+            };
+
+            await this.receiverPc.setRemoteDescription(new RTCSessionDescription(offerSDP));
+            const answer = await this.receiverPc.createAnswer();
+            await this.receiverPc.setLocalDescription(answer);
+
+            this._setStatus("Gathering hotspot answer candidates...", "info");
+            await this._waitForIceGathering(this.receiverPc);
+
+            const localAnswerSDP = this.receiverPc.localDescription;
+            const compressedReply = await this._compressSdp(localAnswerSDP);
+            this.currentReplyCode = compressedReply;
+
+            this.$receiverReplyCard.removeAttribute('hidden');
+            this._renderQr(this.$receiveQr, compressedReply);
+            this._setStatus("Reply code generated! Show QR to sender or copy code.", "success");
+        } catch (err) {
+            console.error("Error creating offline answer:", err);
+            this._setStatus("Failed to decode offer: " + err.message, "error");
+        }
+    }
+
+    async _applyReply() {
+        const rawReply = this.$senderReplyInput.value.trim();
+        if (!rawReply) {
+            this._setStatus("Please paste the receiver's reply code first.", "error");
+            return;
+        }
+        if (!this.senderPc) {
+            this._setStatus("Please create an offer link first.", "error");
+            return;
+        }
+        this._setStatus("Connecting to receiver over local hotspot...", "info");
+        try {
+            const answerSDP = await this._decompressSdp(rawReply);
+            await this.senderPc.setRemoteDescription(new RTCSessionDescription(answerSDP));
+            this._setStatus("Remote description accepted. Finalizing connection...", "info");
+            if (this.senderDc && this.senderDc.readyState === 'open') {
+                this._onDirectChannelOpened(this.senderPc, this.senderDc, true);
+            }
+        } catch (err) {
+            console.error("Error applying reply:", err);
+            this._setStatus("Failed to connect: " + err.message, "error");
+        }
+    }
+
+    _onDirectChannelOpened(pc, dc, isCaller) {
+        this._setStatus("Direct Hotspot Connected! Opening workspace...", "success");
+        const peerId = 'offline-' + Math.random().toString(36).substring(2, 9);
+        const offlinePeer = new OfflineRTCPeer(isCaller, peerId, pc, dc);
+
+        if (window.pairDrop && window.pairDrop.peers) {
+            window.pairDrop.peers.peers[peerId] = offlinePeer;
+        }
+
+        const peerInfo = {
+            id: peerId,
+            name: {
+                model: isCaller ? 'Hotspot Receiver' : 'Hotspot Sender',
+                deviceName: 'Local Hotspot',
+                displayName: isCaller ? 'Hotspot Receiver' : 'Hotspot Sender'
+            },
+            rtcSupported: true
+        };
+
+        Events.fire('peer-joined', {
+            peer: peerInfo,
+            roomType: 'offline',
+            roomId: 'offline-hotspot'
+        });
+
+        Events.fire('peer-connected', {
+            peerId: peerId,
+            connectionHash: offlinePeer.getConnectionHash()
+        });
+
+        setTimeout(() => {
+            this.hide();
+            Events.fire('notify-user', 'Connected over hotspot! Tap the device avatar to send files.');
+        }, 600);
+    }
+
+    _renderQr($container, text) {
+        if (!$container) return;
+        if (typeof QRCode !== 'undefined') {
+            try {
+                const qr = new QRCode({
+                    content: text,
+                    width: 170,
+                    height: 170,
+                    padding: 2,
+                    background: 'white',
+                    color: '#070b14',
+                    ecl: 'L',
+                    join: true
+                });
+                $container.innerHTML = qr.svg();
+                return;
+            } catch (e) {
+                console.warn('QRCode svg generation error:', e);
+            }
+        }
+        $container.innerHTML = '<p class="font-subheading p-2">Code ready (use Copy Code button)</p>';
+    }
+
+    _copyText(text, label) {
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => {
+                Events.fire('notify-user', `${label} copied to clipboard!`);
+            }).catch(() => this._fallbackCopy(text));
+        } else {
+            this._fallbackCopy(text);
+        }
+    }
+
+    _fallbackCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {
+            document.execCommand('copy');
+            Events.fire('notify-user', 'Copied to clipboard!');
+        } catch (e) {}
+        document.body.removeChild(ta);
+    }
+
+    _resetSender() {
+        if (this.senderDc) {
+            this.senderDc.onopen = null;
+            this.senderDc = null;
+        }
+        if (this.senderPc) {
+            this.senderPc.close();
+            this.senderPc = null;
+        }
+        this.currentOfferCode = '';
+        if (this.$sendQr) this.$sendQr.innerHTML = '<div class="qr-placeholder-spinner">Generating link...</div>';
+    }
+}
+

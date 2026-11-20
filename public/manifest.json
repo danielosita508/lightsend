@@ -27,6 +27,7 @@
     ],
     "background_color": "#070b14",
     "start_url": "./",
+    "id": "./",
     "display": "standalone",
     "theme_color": "#0ea5e9",
     "screenshots" : [
@@ -72,7 +73,7 @@
         }
     ],
     "share_target": {
-        "action": "/",
+        "action": "./",
         "method":"POST",
         "enctype": "multipart/form-data",
         "params": {
