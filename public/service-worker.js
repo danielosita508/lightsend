@@ -1,4 +1,4 @@
-const cacheVersion = 'v2.1.0-protected-drop';
+const cacheVersion = 'v2.2.0-protected-click-fix';
 const cacheTitle = `lightsend-cache-${cacheVersion}`;
 const relativePathsToCache = [
     './',

@@ -3248,7 +3248,7 @@ class OfflineDirectConnectDialog extends Dialog {
 class ProtectedDropUI extends Dialog {
     constructor() {
         super('protected-send-dialog');
-        this.isEnabled = false;
+        this.isEnabled = !!window.isProtectedDropActive;
         this.$toggleBtn = $('protected-drop-toggle');
         this.$toggleStatus = $('protected-drop-status');
         this.$pinInput = $('protected-send-pin');
@@ -3259,9 +3259,7 @@ class ProtectedDropUI extends Dialog {
 
         this._pendingSend = null;
 
-        if (this.$toggleBtn) {
-            this.$toggleBtn.addEventListener('click', () => this.toggle());
-        }
+        // Note: $toggleBtn click is handled by window.toggleProtectedDrop on the button to prevent duplicate event triggers
         if (this.$confirmBtn) {
             this.$confirmBtn.addEventListener('click', () => this._onConfirmSend());
         }
@@ -3281,20 +3279,7 @@ class ProtectedDropUI extends Dialog {
     }
 
     toggle() {
-        this.isEnabled = !this.isEnabled;
-        if (this.$toggleBtn) {
-            if (this.isEnabled) {
-                this.$toggleBtn.classList.add('active');
-                this.$toggleBtn.setAttribute('aria-pressed', 'true');
-                if (this.$toggleStatus) this.$toggleStatus.innerText = 'ON';
-                Events.fire('notify-user', 'Protected Drop enabled (NDPA zero-cloud + PIN)');
-            } else {
-                this.$toggleBtn.classList.remove('active');
-                this.$toggleBtn.setAttribute('aria-pressed', 'false');
-                if (this.$toggleStatus) this.$toggleStatus.innerText = 'OFF';
-                Events.fire('notify-user', 'Protected Drop disabled');
-            }
-        }
+        window.toggleProtectedDrop();
     }
 
     async computeSha256(data) {

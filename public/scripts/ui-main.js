@@ -1,3 +1,27 @@
+// LightSend Protected Drop Immediate Toggle Handler
+window.toggleProtectedDrop = function(e) {
+    if (e && e.stopPropagation) e.stopPropagation();
+    window.isProtectedDropActive = !window.isProtectedDropActive;
+    if (window.ProtectedDrop) {
+        window.ProtectedDrop.isEnabled = window.isProtectedDropActive;
+    }
+    const btn = document.getElementById('protected-drop-toggle');
+    const status = document.getElementById('protected-drop-status');
+    if (btn) {
+        if (window.isProtectedDropActive) {
+            btn.classList.add('active');
+            btn.setAttribute('aria-pressed', 'true');
+            if (status) status.innerText = 'ON';
+            if (window.Events) Events.fire('notify-user', 'Protected Drop enabled (NDPA zero-cloud + PIN)');
+        } else {
+            btn.classList.remove('active');
+            btn.setAttribute('aria-pressed', 'false');
+            if (status) status.innerText = 'OFF';
+            if (window.Events) Events.fire('notify-user', 'Protected Drop disabled');
+        }
+    }
+};
+
 // Selector shortcuts
 const $ = query => document.getElementById(query);
 const $$ = query => document.querySelector(query);
