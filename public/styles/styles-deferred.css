@@ -815,3 +815,68 @@ x-dialog a {
     margin: auto;
     display: block;
 }
+
+/* LightSend Peer Node & Transfer Enhancements */
+x-peer {
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), filter 0.25s ease !important;
+}
+
+x-peer:hover {
+    transform: translateY(-4px) scale(1.05) !important;
+}
+
+x-peer x-icon {
+    border-radius: 50% !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 2px solid rgba(14, 165, 233, 0.4) !important;
+    box-shadow: 0 0 24px rgba(14, 165, 233, 0.25) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.light-theme x-peer x-icon {
+    background: rgba(255, 255, 255, 0.85) !important;
+    border: 2px solid rgba(14, 165, 233, 0.4) !important;
+    box-shadow: 0 4px 20px rgba(14, 165, 233, 0.18) !important;
+}
+
+x-peer:hover x-icon {
+    border-color: #38bdf8 !important;
+    box-shadow: 0 0 32px rgba(14, 165, 233, 0.5) !important;
+}
+
+x-peer.paired-peer x-icon {
+    border-color: #10b981 !important;
+    box-shadow: 0 0 28px rgba(16, 185, 129, 0.35) !important;
+}
+
+x-peer.paired-peer:hover x-icon {
+    border-color: #34d399 !important;
+    box-shadow: 0 0 36px rgba(52, 211, 153, 0.5) !important;
+}
+
+x-peer.ws-peer x-icon {
+    border-color: #f43f5e !important;
+    box-shadow: 0 0 28px rgba(244, 63, 94, 0.35) !important;
+}
+
+x-peer .device-name {
+    font-weight: 600 !important;
+    letter-spacing: -0.01em !important;
+    font-size: 13.5px !important;
+    margin-top: 6px !important;
+}
+
+x-peer .status {
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+    color: #38bdf8 !important;
+}
+
+.circle {
+    border-color: #0ea5e9 !important;
+    box-shadow: 0 0 12px rgba(14, 165, 233, 0.4) !important;
+}

@@ -344,9 +344,9 @@ class BackgroundCanvas {
     }
 
     initAnimation() {
-        this.baseColorNormal = '168 168 168';
-        this.baseColorShareMode = '168 168 255';
-        this.baseOpacityNormal = 0.3;
+        this.baseColorNormal = '14 165 233';
+        this.baseColorShareMode = '99 102 241';
+        this.baseOpacityNormal = 0.45;
         this.baseOpacityShareMode = 0.8;
         this.speed = 0.5;
         this.fps = 60;

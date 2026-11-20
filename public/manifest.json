@@ -1,6 +1,6 @@
 {
-    "name": "PairDrop",
-    "short_name": "PairDrop",
+    "name": "LightSend",
+    "short_name": "LightSend",
     "icons": [
         {
             "src": "images/android-chrome-192x192.png",
@@ -25,10 +25,10 @@
             "purpose": "maskable"
         }
     ],
-    "background_color": "#efefef",
+    "background_color": "#070b14",
     "start_url": "./",
     "display": "standalone",
-    "theme_color": "#3367d6",
+    "theme_color": "#0ea5e9",
     "screenshots" : [
         {
             "src": "images/pairdrop_screenshot_mobile_1.png",
