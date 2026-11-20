@@ -178,6 +178,7 @@ class PairDrop {
         this.clearDevicesDialog = new EditPairedDevicesDialog();
         this.publicRoomDialog = new PublicRoomDialog();
         this.offlineDirectDialog = new OfflineDirectConnectDialog();
+        this.protectedDropUI = new ProtectedDropUI();
         this.base64Dialog = new Base64Dialog();
         this.shareTextDialog = new ShareTextDialog();
         this.toast = new Toast();

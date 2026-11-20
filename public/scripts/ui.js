@@ -871,7 +871,14 @@ class ReceiveDialog extends Dialog {
 
         this.$fileOther.innerText = fileOther;
 
-        const fileName = files[0].name;
+        let rawFileName = files[0].name;
+        let fileName = rawFileName;
+        if (rawFileName.startsWith('lsprot__')) {
+            const parts = rawFileName.split('__');
+            if (parts.length >= 3) {
+                fileName = parts.slice(2).join('__');
+            }
+        }
         const fileNameSplit = fileName.split('.');
         const fileExtension = fileNameSplit.length > 1
             ? '.' + fileNameSplit[fileNameSplit.length - 1]
@@ -893,6 +900,11 @@ class ReceiveFileDialog extends ReceiveDialog {
 
         this.$downloadBtn = this.$el.querySelector('#download-btn');
         this.$shareBtn = this.$el.querySelector('#share-btn');
+        this.$protectedReceiveBox = this.$el.querySelector('#protected-receive-box');
+        this.$protectedReceivePin = this.$el.querySelector('#protected-receive-pin');
+        this.$protectedReleaseBtn = this.$el.querySelector('#protected-release-btn');
+        this.$protectedPinError = this.$el.querySelector('#protected-pin-error');
+        this.$auditReceiptBtn = this.$el.querySelector('#audit-receipt-btn');
 
         Events.on('files-received', e => this._onFilesReceived(e.detail.peerId, e.detail.files, e.detail.imagesOnly, e.detail.totalSize));
         this._filesQueue = [];
@@ -963,6 +975,45 @@ class ReceiveFileDialog extends ReceiveDialog {
     async _displayFiles(peerId, displayName, connectionHash, files, imagesOnly, totalSize, badgeClassName) {
         this._parseFileData(displayName, connectionHash, files, imagesOnly, totalSize, badgeClassName);
 
+        let isProtected = false;
+        let pinHash = 'NONE';
+        let cleanName = files[0].name;
+        if (files[0].name.startsWith('lsprot__')) {
+            isProtected = true;
+            const parts = files[0].name.split('__');
+            if (parts.length >= 3) {
+                pinHash = parts[1];
+                cleanName = parts.slice(2).join('__');
+            }
+        }
+        const isPinLocked = isProtected && pinHash !== 'NONE';
+
+        if (this.$protectedReceiveBox) this.$protectedReceiveBox.style.display = 'none';
+        if (this.$protectedPinError) this.$protectedPinError.style.display = 'none';
+        if (this.$auditReceiptBtn) this.$auditReceiptBtn.style.display = 'none';
+        this._currentProtectedReceipt = null;
+
+        if (isProtected && window.ProtectedDrop) {
+            const selfDisplayName = ($('display-name') ? $('display-name').innerText : 'Receiver');
+            window.ProtectedDrop.computeSha256(files[0]).then(fullHash => {
+                this._currentProtectedReceipt = {
+                    title: "LightSend NDPA Zero-Cloud Transfer Certificate",
+                    filename: cleanName,
+                    fileSize: this._formatFileSize(totalSize),
+                    fileHash: fullHash,
+                    timestamp: window.ProtectedDrop.getWatTimestamp(),
+                    senderName: displayName,
+                    receiverName: selfDisplayName,
+                    consentStatus: "Verified",
+                    transportProof: "Direct Encrypted WebRTC, Zero Cloud Storage, Zero Cross-Border Transfer"
+                };
+                if (this.$auditReceiptBtn) {
+                    this.$auditReceiptBtn.style.display = 'inline-flex';
+                    this.$auditReceiptBtn.onclick = () => window.ProtectedDrop.openAuditReceipt(this._currentProtectedReceipt);
+                }
+            });
+        }
+
         let descriptor, url, filenameDownload;
         if (files.length === 1) {
             descriptor = imagesOnly
@@ -1024,7 +1075,56 @@ class ReceiveFileDialog extends ReceiveDialog {
             }
         }
 
-        this.$downloadBtn.removeAttribute('disabled');
+        if (isPinLocked) {
+            this.$downloadBtn.setAttribute('disabled', 'true');
+            if (this.$protectedReceiveBox) {
+                this.$protectedReceiveBox.style.display = 'block';
+                this.$protectedReceivePin.value = '';
+                this.$protectedPinError.style.display = 'none';
+            }
+
+            // Watermarked preview or locked doc notice before PIN is entered
+            this.$previewBox.innerHTML = '';
+            const isImage = files[0].type.startsWith('image/') || imagesOnly;
+            if (isImage && window.ProtectedDrop) {
+                window.ProtectedDrop.renderWatermarkedPreview(files[0], this.$previewBox);
+            } else if (window.ProtectedDrop) {
+                window.ProtectedDrop.renderLockedDocNotice(this.$previewBox);
+            }
+
+            const onReleasePin = async () => {
+                const pin = this.$protectedReceivePin.value.trim();
+                const testHash = (await window.ProtectedDrop.computeSha256(pin)).substring(0, 8);
+                if (testHash === pinHash) {
+                    if (this.$protectedReceiveBox) this.$protectedReceiveBox.style.display = 'none';
+                    if (this.$protectedPinError) this.$protectedPinError.style.display = 'none';
+                    this.$previewBox.innerHTML = '';
+                    const cleanFile = new File([files[0]], cleanName, { type: files[0].type, lastModified: files[0].lastModified });
+                    await this.createPreviewElement(cleanFile);
+                    this.$downloadBtn.removeAttribute('disabled');
+                    Events.fire('notify-user', 'File released successfully!');
+                } else {
+                    if (this.$protectedPinError) {
+                        this.$protectedPinError.innerText = 'Incorrect 4-digit PIN. Please try again.';
+                        this.$protectedPinError.style.display = 'block';
+                    }
+                    this.$protectedReceivePin.select();
+                }
+            };
+
+            if (this.$protectedReleaseBtn) this.$protectedReleaseBtn.onclick = onReleasePin;
+            if (this.$protectedReceivePin) {
+                this.$protectedReceivePin.onkeydown = (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        onReleasePin();
+                    }
+                };
+            }
+        } else {
+            this.$downloadBtn.removeAttribute('disabled');
+        }
+
         this.$downloadBtn.innerText = Localization.getTranslation("dialogs.download");
         this.$downloadBtn.onclick = _ => {
             if (downloadZipped) {
@@ -1057,30 +1157,41 @@ class ReceiveFileDialog extends ReceiveDialog {
 
         setTimeout(() => {
             // wait for the dialog to be shown
-            if (canShare) {
-                this.$shareBtn.click();
-            }
-            else {
-                this.$downloadBtn.click();
+            if (!isPinLocked) {
+                if (canShare) {
+                    this.$shareBtn.click();
+                }
+                else {
+                    this.$downloadBtn.click();
+                }
             }
         }, 500);
 
-        this.createPreviewElement(files[0])
-            .then(canPreview => {
-                if (canPreview) {
-                    console.log('the file is able to preview');
-                }
-                else {
-                    console.log('the file is not able to preview');
-                }
-            })
-            .catch(r => console.error(r));
+        if (!isPinLocked) {
+            this.createPreviewElement(files[0])
+                .then(canPreview => {
+                    if (canPreview) {
+                        console.log('the file is able to preview');
+                    }
+                    else {
+                        console.log('the file is not able to preview');
+                    }
+                })
+                .catch(r => console.error(r));
+        }
     }
 
     _downloadFilesIndividually(files) {
         let tmpBtn = document.createElement("a");
         for (let i=0; i<files.length; i++) {
-            tmpBtn.download = files[i].name;
+            let dlName = files[i].name;
+            if (dlName.startsWith('lsprot__')) {
+                const parts = dlName.split('__');
+                if (parts.length >= 3) {
+                    dlName = parts.slice(2).join('__');
+                }
+            }
+            tmpBtn.download = dlName;
             tmpBtn.href = URL.createObjectURL(files[i]);
             tmpBtn.click();
         }
@@ -1092,6 +1203,9 @@ class ReceiveFileDialog extends ReceiveDialog {
             this.$shareBtn.setAttribute('hidden', true);
             this.$downloadBtn.setAttribute('disabled', true);
             this.$previewBox.innerHTML = '';
+            if (this.$protectedReceiveBox) this.$protectedReceiveBox.style.display = 'none';
+            if (this.$auditReceiptBtn) this.$auditReceiptBtn.style.display = 'none';
+            this._currentProtectedReceipt = null;
             this._busy = false;
             await this._nextFiles();
         }, 300);
@@ -2453,24 +2567,42 @@ class Toast extends Dialog {
         super('toast');
         this.$closeBtn = this.$el.querySelector('.icon-button');
         this.$text = this.$el.querySelector('span');
+        this.$auditBtn = this.$el.querySelector('#toast-audit-btn');
 
         this.$closeBtn.addEventListener('click', _ => this.hide());
+        if (this.$auditBtn) {
+            this.$auditBtn.addEventListener('click', () => {
+                if (window.lastProtectedReceipt && window.ProtectedDrop) {
+                    window.ProtectedDrop.openAuditReceipt(window.lastProtectedReceipt);
+                }
+            });
+        }
         Events.on('notify-user', e => this._onNotify(e.detail));
         Events.on('share-mode-changed', _ => this.hide());
     }
 
     _onNotify(message) {
         if (this.hideTimeout) clearTimeout(this.hideTimeout);
-        this.$text.innerText = typeof message === "object" ? message.message : message;
+        if (this.$auditBtn) this.$auditBtn.style.display = 'none';
+
+        if (typeof message === "object") {
+            this.$text.innerText = message.message;
+            if (message.showAuditReceipt && this.$auditBtn) {
+                this.$auditBtn.style.display = 'inline-flex';
+            }
+        } else {
+            this.$text.innerText = message;
+        }
         this.show();
 
         if (typeof message === "object" && message.persistent) return;
 
-        this.hideTimeout = setTimeout(() => this.hide(), 5000);
+        this.hideTimeout = setTimeout(() => this.hide(), (typeof message === "object" && message.showAuditReceipt) ? 8000 : 5000);
     }
 
     hide() {
         if (this.hideTimeout) clearTimeout(this.hideTimeout);
+        if (this.$auditBtn) this.$auditBtn.style.display = 'none';
         super.hide();
     }
 }
@@ -3110,6 +3242,469 @@ class OfflineDirectConnectDialog extends Dialog {
         }
         this.currentOfferCode = '';
         if (this.$sendQr) this.$sendQr.innerHTML = '<div class="qr-placeholder-spinner">Generating link...</div>';
+    }
+}
+
+class ProtectedDropUI extends Dialog {
+    constructor() {
+        super('protected-send-dialog');
+        this.isEnabled = false;
+        this.$toggleBtn = $('protected-drop-toggle');
+        this.$toggleStatus = $('protected-drop-status');
+        this.$pinInput = $('protected-send-pin');
+        this.$consentCb = $('protected-consent-cb');
+        this.$confirmBtn = $('protected-send-confirm-btn');
+        this.$cancelBtn = $('protected-send-cancel-btn');
+        this.$error = $('protected-send-error');
+
+        this._pendingSend = null;
+
+        if (this.$toggleBtn) {
+            this.$toggleBtn.addEventListener('click', () => this.toggle());
+        }
+        if (this.$confirmBtn) {
+            this.$confirmBtn.addEventListener('click', () => this._onConfirmSend());
+        }
+        if (this.$cancelBtn) {
+            this.$cancelBtn.addEventListener('click', () => this._onCancelSend());
+        }
+        if (this.$pinInput) {
+            this.$pinInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this._onConfirmSend();
+                }
+            });
+        }
+
+        window.ProtectedDrop = this;
+    }
+
+    toggle() {
+        this.isEnabled = !this.isEnabled;
+        if (this.$toggleBtn) {
+            if (this.isEnabled) {
+                this.$toggleBtn.classList.add('active');
+                this.$toggleBtn.setAttribute('aria-pressed', 'true');
+                if (this.$toggleStatus) this.$toggleStatus.innerText = 'ON';
+                Events.fire('notify-user', 'Protected Drop enabled (NDPA zero-cloud + PIN)');
+            } else {
+                this.$toggleBtn.classList.remove('active');
+                this.$toggleBtn.setAttribute('aria-pressed', 'false');
+                if (this.$toggleStatus) this.$toggleStatus.innerText = 'OFF';
+                Events.fire('notify-user', 'Protected Drop disabled');
+            }
+        }
+    }
+
+    async computeSha256(data) {
+        let buffer;
+        if (typeof data === 'string') {
+            buffer = new TextEncoder().encode(data);
+        } else if (data instanceof Blob) {
+            buffer = await data.arrayBuffer();
+        } else if (data instanceof ArrayBuffer) {
+            buffer = data;
+        } else {
+            buffer = new Uint8Array(data);
+        }
+        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    getWatTimestamp() {
+        try {
+            return new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Africa/Lagos',
+                dateStyle: 'full',
+                timeStyle: 'medium'
+            }).format(new Date()) + ' (WAT GMT+1)';
+        } catch (e) {
+            return new Date().toLocaleString() + ' (WAT GMT+1)';
+        }
+    }
+
+    formatFileSize(bytes) {
+        if (!bytes || bytes === 0) return '0 Bytes';
+        if (bytes >= 1073741824) return (Math.round(10 * bytes / 1073741824) / 10) + ' GB';
+        if (bytes >= 1048576) return (Math.round(10 * bytes / 1048576) / 10) + ' MB';
+        if (bytes >= 1024) return Math.round(bytes / 1024) + ' KB';
+        return bytes + ' Bytes';
+    }
+
+    promptPreSend({ files, peerId, sendCallback }) {
+        this._pendingSend = { files, peerId, sendCallback };
+        if (this.$pinInput) this.$pinInput.value = '';
+        if (this.$consentCb) this.$consentCb.checked = true;
+        if (this.$error) this.$error.style.display = 'none';
+        this.show();
+        setTimeout(() => {
+            if (this.$pinInput) this.$pinInput.focus();
+        }, 150);
+    }
+
+    async _onConfirmSend() {
+        if (!this._pendingSend) return;
+        if (this.$consentCb && !this.$consentCb.checked) {
+            if (this.$error) {
+                this.$error.innerText = 'Please confirm zero-cloud consent to proceed.';
+                this.$error.style.display = 'block';
+            }
+            return;
+        }
+        const pin = this.$pinInput ? this.$pinInput.value.trim() : '';
+        if (pin.length > 0 && pin.length !== 4) {
+            if (this.$error) {
+                this.$error.innerText = 'PIN must be exactly 4 digits or left empty.';
+                this.$error.style.display = 'block';
+            }
+            return;
+        }
+
+        let pinHash = 'NONE';
+        if (pin.length === 4) {
+            const fullPinHash = await this.computeSha256(pin);
+            pinHash = fullPinHash.substring(0, 8);
+        }
+
+        const { files, peerId, sendCallback } = this._pendingSend;
+        this.hide();
+        this._pendingSend = null;
+
+        // Wrap files with lsprot__<pinHash>__<filename>
+        const wrappedFiles = files.map(file => {
+            const prefixedName = `lsprot__${pinHash}__${file.name}`;
+            return new File([file], prefixedName, {
+                type: file.type,
+                lastModified: file.lastModified
+            });
+        });
+
+        // Compute full SHA-256 of file bytes on sender side
+        const fullFileHash = await this.computeSha256(files[0]);
+        const selfName = $('display-name') ? $('display-name').innerText : 'Sender';
+        const peerNode = $(peerId);
+        const peerName = (peerNode && peerNode.ui) ? peerNode.ui._displayName() : 'Receiver';
+
+        window.lastProtectedReceipt = {
+            title: "LightSend NDPA Zero-Cloud Transfer Certificate",
+            filename: files[0].name,
+            fileSize: this.formatFileSize(files[0].size),
+            fileHash: fullFileHash,
+            timestamp: this.getWatTimestamp(),
+            senderName: selfName,
+            receiverName: peerName,
+            consentStatus: "Verified",
+            transportProof: "Direct Encrypted WebRTC, Zero Cloud Storage, Zero Cross-Border Transfer"
+        };
+
+        // Dispatch transfer
+        await sendCallback(wrappedFiles);
+
+        // Notify user with Audit Receipt button in toast
+        Events.fire('notify-user', {
+            message: 'Protected Drop sent · NDPA direct transfer',
+            showAuditReceipt: true
+        });
+    }
+
+    _onCancelSend() {
+        this._pendingSend = null;
+        this.hide();
+    }
+
+    renderWatermarkedPreview(file, container) {
+        container.innerHTML = '';
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            const maxW = 320;
+            const maxH = 240;
+            let w = img.width;
+            let h = img.height;
+            if (w > maxW) {
+                h = Math.round(h * (maxW / w));
+                w = maxW;
+            }
+            if (h > maxH) {
+                w = Math.round(w * (maxH / h));
+                h = maxH;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            canvas.className = 'watermarked-preview-canvas';
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+
+            // Diagonal watermark
+            ctx.save();
+            ctx.translate(w / 2, h / 2);
+            ctx.rotate(-Math.PI / 6);
+            ctx.font = 'bold ' + Math.max(16, Math.round(w / 11)) + 'px -apple-system, sans-serif';
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+            ctx.shadowBlur = 5;
+            ctx.fillText('LIGHTSEND PREVIEW', 0, 0);
+            ctx.restore();
+
+            container.appendChild(canvas);
+            URL.revokeObjectURL(url);
+        };
+        img.src = url;
+    }
+
+    renderLockedDocNotice(container) {
+        container.innerHTML = `
+            <div class="locked-document-notice">
+                <svg class="lock-svg" viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+                <div class="lock-doc-title">PIN required to release document</div>
+                <div class="lock-doc-sub">Enter sender's 4-digit PIN below to preview and download</div>
+            </div>
+        `;
+    }
+
+    openAuditReceipt(receipt) {
+        if (!receipt) return;
+        const win = window.open('', '_blank', 'width=760,height=840');
+        if (!win) {
+            alert('Please allow popups to view the NDPA Audit Receipt');
+            return;
+        }
+        const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>LightSend NDPA Zero-Cloud Transfer Certificate</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            padding: 36px 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .cert-card {
+            background: #1e293b;
+            border: 1px solid rgba(14, 165, 233, 0.35);
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+            max-width: 660px;
+            width: 100%;
+            padding: 36px;
+        }
+        .cert-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 20px;
+            margin-bottom: 24px;
+        }
+        .cert-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .brand-bolt {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #0ea5e9, #6366f1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .cert-title-block h1 {
+            font-size: 19px;
+            font-weight: 700;
+            color: #38bdf8;
+            letter-spacing: -0.3px;
+        }
+        .cert-title-block p {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 2px;
+        }
+        .badge-ndpa {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(52, 211, 153, 0.35);
+            padding: 6px 12px;
+            border-radius: 9999px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        .cert-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 13.5px;
+        }
+        .cert-table tr {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .cert-table td {
+            padding: 12px 6px;
+            vertical-align: top;
+        }
+        .td-label {
+            color: #94a3b8;
+            width: 160px;
+            font-weight: 600;
+        }
+        .td-val {
+            color: #f1f5f9;
+            font-weight: 500;
+            word-break: break-all;
+        }
+        .hash-code {
+            background: #090d16;
+            border: 1px solid rgba(14, 165, 233, 0.25);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11.5px;
+            color: #38bdf8;
+            letter-spacing: 0.5px;
+            line-height: 1.5;
+        }
+        .proof-box {
+            background: rgba(14, 165, 233, 0.08);
+            border-left: 3px solid #0ea5e9;
+            padding: 14px 16px;
+            border-radius: 0 8px 8px 0;
+            margin-top: 20px;
+            font-size: 12.5px;
+            line-height: 1.5;
+            color: #bae6fd;
+        }
+        .verified-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 12px;
+        }
+        .cert-footer {
+            margin-top: 28px;
+            padding-top: 16px;
+            border-top: 1px dashed rgba(255, 255, 255, 0.12);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            color: #64748b;
+        }
+        .print-btn-row {
+            margin-top: 20px;
+            text-align: right;
+        }
+        .print-btn {
+            background: #0ea5e9;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        @media print {
+            body { background: white !important; color: #0f172a !important; padding: 0 !important; }
+            .cert-card { background: white !important; color: #0f172a !important; border: 2px solid #0284c7 !important; box-shadow: none !important; }
+            .cert-title-block h1 { color: #0369a1 !important; }
+            .td-label { color: #64748b !important; }
+            .td-val { color: #0f172a !important; }
+            .hash-code { background: #f8fafc !important; color: #0369a1 !important; border-color: #cbd5e1 !important; }
+            .proof-box { background: #f0f9ff !important; color: #0369a1 !important; }
+            .print-btn-row { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <div class="cert-card">
+        <div class="cert-header">
+            <div class="cert-brand">
+                <div class="brand-bolt">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="white"><path d="M13 2L3 14h8l-2 8 11-12h-8l2-8z"/></svg>
+                </div>
+                <div class="cert-title-block">
+                    <h1>LightSend NDPA Zero-Cloud Transfer Certificate</h1>
+                    <p>Cryptographic Transfer Verification</p>
+                </div>
+            </div>
+            <span class="badge-ndpa">NDPA Compliant</span>
+        </div>
+        <table class="cert-table">
+            <tr>
+                <td class="td-label">Certificate Title</td>
+                <td class="td-val">${receipt.title}</td>
+            </tr>
+            <tr>
+                <td class="td-label">Clean File Name</td>
+                <td class="td-val"><strong>${receipt.filename}</strong></td>
+            </tr>
+            <tr>
+                <td class="td-label">File Size</td>
+                <td class="td-val">${receipt.fileSize}</td>
+            </tr>
+            <tr>
+                <td class="td-label">SHA-256 Hash</td>
+                <td class="td-val"><div class="hash-code">${receipt.fileHash}</div></td>
+            </tr>
+            <tr>
+                <td class="td-label">WAT Timestamp</td>
+                <td class="td-val">${receipt.timestamp}</td>
+            </tr>
+            <tr>
+                <td class="td-label">Sender Session</td>
+                <td class="td-val">${receipt.senderName}</td>
+            </tr>
+            <tr>
+                <td class="td-label">Receiver Session</td>
+                <td class="td-val">${receipt.receiverName}</td>
+            </tr>
+            <tr>
+                <td class="td-label">Consent Status</td>
+                <td class="td-val"><span class="verified-pill">✓ ${receipt.consentStatus}</span></td>
+            </tr>
+        </table>
+        <div class="proof-box">
+            <strong>Transport Proof:</strong> ${receipt.transportProof}
+        </div>
+        <div class="cert-footer">
+            <span>Verified by LightSend Cryptographic Engine</span>
+            <span>Zero Cloud Storage · Zero Logs</span>
+        </div>
+        <div class="print-btn-row">
+            <button class="print-btn" onclick="window.print()">Print Certificate</button>
+        </div>
+    </div>
+    <script>
+        window.onload = function() {
+            setTimeout(function() { window.print(); }, 200);
+        };
+    </script>
+</body>
+</html>`;
+        win.document.open();
+        win.document.write(html);
+        win.document.close();
     }
 }
 

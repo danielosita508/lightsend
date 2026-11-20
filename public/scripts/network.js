@@ -1119,6 +1119,16 @@ class PeersManager {
 
     async _onFilesSelected(message) {
         let files = mime.addMissingMimeTypesToFiles([...message.files]);
+        if (window.ProtectedDrop && window.ProtectedDrop.isEnabled) {
+            window.ProtectedDrop.promptPreSend({
+                files: files,
+                peerId: message.to,
+                sendCallback: async (wrappedFiles) => {
+                    await this.peers[message.to].requestFileTransfer(wrappedFiles);
+                }
+            });
+            return;
+        }
         await this.peers[message.to].requestFileTransfer(files);
     }
 
